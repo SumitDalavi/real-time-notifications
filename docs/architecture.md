@@ -5,13 +5,13 @@ The following Mermaid.js sequence diagram maps the core workflow and interaction
 
 ```mermaid
 sequenceDiagram
-    System->>Redis: Publish Event
-Redis->>WS_Server1: Subscribed Event
+    System->>In-Memory LRU Cache / Node.js Maps: Publish Event
+In-Memory LRU Cache / Node.js Maps->>WS_Server1: Subscribed Event
 WS_Server1->>client: WebSocket Frame
 ```
 
 ## Component Breakdown
-- **Core Technology**: Node.js, WebSockets, Redis
+- **Core Technology**: Node.js, WebSockets, In-Memory LRU Cache / Node.js Maps
 - **Design Paradigm**: Emphasizes high availability, fault tolerance, and security.
 
 ## Security & Scaling Considerations

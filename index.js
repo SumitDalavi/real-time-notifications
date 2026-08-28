@@ -1,20 +1,51 @@
 const express = require('express');
 const { WebSocketServer } = require('ws');
-const Redis = require('ioredis');
+const crypto = require('crypto');
 
 const app = express();
-const pub = new Redis(process.env.REDIS_URL || 'redis://localhost:6379');
-const sub = new Redis(process.env.REDIS_URL || 'redis://localhost:6379');
+app.use(express.json());
 
+// --- Core State ---
+// Map of userId -> Set of WebSocket connections (supports multiple devices per user)
 const clients = new Map();
 
-sub.subscribe('notifications');
-sub.on('message', (channel, message) => {
-    const { userId, payload } = JSON.parse(message);
-    const ws = clients.get(userId);
-    if (ws) ws.send(JSON.stringify(payload));
-});
+// Map of userId -> Array of missed messages
+const messageBuffer = new Map();
 
+// Map of userId -> { status: 'online' | 'offline', lastSeen: number }
+const presence = new Map();
+
+// --- Notification Engine Logic ---
+function trackPresence(userId, status) {
+    presence.set(userId, { status, lastSeen: Date.now() });
+}
+
+function bufferMessage(userId, message) {
+    if (!messageBuffer.has(userId)) {
+        messageBuffer.set(userId, []);
+    }
+    // Store message with timestamp and ID for deduplication/syncing
+    messageBuffer.get(userId).push({
+        id: crypto.randomUUID(),
+        timestamp: Date.now(),
+        ...message
+    });
+    // Keep only last 50 messages to prevent memory leak
+    if (messageBuffer.get(userId).length > 50) {
+        messageBuffer.get(userId).shift();
+    }
+}
+
+function syncMissedMessages(userId, ws) {
+    const missed = messageBuffer.get(userId);
+    if (missed && missed.length > 0) {
+        ws.send(JSON.stringify({ type: 'SYNC', messages: missed }));
+        // Clear buffer after sync
+        messageBuffer.set(userId, []);
+    }
+}
+
+// --- WebSocket Server Initialization ---
 let server;
 let wss;
 
@@ -24,14 +55,61 @@ function init(httpServer) {
     
     wss.on('connection', (ws, req) => {
         const userId = new URL(req.url, 'http://localhost').searchParams.get('userId');
-        clients.set(userId, ws);
-        ws.on('close', () => clients.delete(userId));
+        if (!userId) {
+            ws.close(4001, 'userId is required');
+            return;
+        }
+
+        if (!clients.has(userId)) {
+            clients.set(userId, new Set());
+        }
+        clients.get(userId).add(ws);
+
+        // Mark user as online
+        trackPresence(userId, 'online');
+
+        // Sync missed messages upon successful connect/reconnect
+        syncMissedMessages(userId, ws);
+
+        ws.on('close', () => {
+            const userConnections = clients.get(userId);
+            if (userConnections) {
+                userConnections.delete(ws);
+                if (userConnections.size === 0) {
+                    // User has closed all devices, mark offline
+                    trackPresence(userId, 'offline');
+                }
+            }
+        });
     });
 }
 
-app.post('/notify/:userId', express.json(), (req, res) => {
-    pub.publish('notifications', JSON.stringify({ userId: req.params.userId, payload: req.body }));
-    res.send('Published');
+// --- API Endpoints ---
+app.post('/notify/:userId', (req, res) => {
+    const { userId } = req.params;
+    const payload = req.body;
+
+    const userConnections = clients.get(userId);
+    const userIsOnline = userConnections && userConnections.size > 0;
+
+    const message = { type: 'NOTIFICATION', payload };
+
+    if (userIsOnline) {
+        // Broadcast to all active connections for this user
+        for (const ws of userConnections) {
+            ws.send(JSON.stringify(message));
+        }
+        res.json({ delivered: true, devices: userConnections.size });
+    } else {
+        // User offline, buffer message for reconnect semantics
+        bufferMessage(userId, message);
+        res.json({ delivered: false, buffered: true });
+    }
+});
+
+app.get('/presence/:userId', (req, res) => {
+    const state = presence.get(req.params.userId) || { status: 'offline', lastSeen: null };
+    res.json(state);
 });
 
 if (require.main === module) {
@@ -39,4 +117,4 @@ if (require.main === module) {
     init(httpServer);
 }
 
-module.exports = { app, init, pub, sub, clients };
+module.exports = { app, init, clients, messageBuffer, presence, trackPresence, bufferMessage };
