@@ -11,14 +11,10 @@
 > Scalable WebSocket notification server powered by Redis Pub/Sub for cross-instance state synchronization.
 
 ## The Problem
-## Problem Statement
-Managing persistent WebSocket connections across nodes traditionally requires Redis Pub/Sub.
+Managing persistent WebSocket connections across multiple horizontally scaled application instances leads to disconnected user presence and lost notifications without a coordinated pub/sub mesh.
 
 ## Architecture & Solution
-An embedded message buffer and native JavaScript Map structures to track presence and connection state. Explicitly handles reconnect syncing. Simple CRUD applications fail when subjected to high throughput, race conditions, or massive data sets.
-
-## The Solution
-This project implements a robust microservice architecture designed to handle these specific edge cases. By utilizing advanced paradigms like idempotency keys, advisory locks, or optimized caching layers, this service guarantees data integrity under load.
+This notification service provides cross-instance pub/sub synchronization and client connection lifecycle tracking. An embedded message buffer and connection state manager guarantee delivery and handle reconnection synchronization gracefully.
 
 ```text
 ┌──────────────┐      ┌───────────────┐      ┌───────────────┐
